@@ -267,42 +267,32 @@ async def process_moderation_vote(
         return
     
     # Проверяем, достаточно ли голосов для принятия решения
-    total_admins = 4  # Число админов, которые должны проголосовать
+    total_admins = 4  # Для тестирования используем 2 админа
     total_votes = len(votes)
     approved_votes = sum(1 for vote in votes if vote.approved)
     rejected_votes = sum(1 for vote in votes if not vote.approved)  # Явный подсчет отклоненных голосов
     
     any_rejected = rejected_votes > 0
     all_voted = total_votes >= total_admins
+    majority_voted = total_votes >= (total_admins // 2 + 1)  # Большинство админов проголосовало
     
     logging.info(f"Votes for user {callback_data.user_id}: total={total_votes}, approved={approved_votes}, rejected={rejected_votes}")
-    logging.info(f"Decision criteria: any_rejected={any_rejected}, all_voted={all_voted}")
+    logging.info(f"Decision criteria: any_rejected={any_rejected}, all_voted={all_voted}, majority_voted={majority_voted}")
     
-    # Проверяем, было ли уже принято решение по этому пользователю
-    if user.moderation_status is not None:
-        # Решение уже принято, не обрабатываем повторно
-        logging.info(f"Decision for user {callback_data.user_id} already made: {user.moderation_status}")
-        await callback.answer("Решение по этому пользователю уже принято.")
-    else:
-        # Принимаем решение только если все админы проголосовали или есть хотя бы один голос против
-        if all_voted or any_rejected:
-            # Одобряем только если нет ни одного голоса против
-            should_approve = not any_rejected
-            logging.info(f"Making decision for user {callback_data.user_id}: approved={should_approve}, approved_votes={approved_votes}, rejected_votes={rejected_votes}")
-            
-            # Обновляем статус модерации пользователя
-            # Уведомление пользователю будет отправлено в функции send_notification_in_background
-            user = await update_user_moderation_status(
-                session=session,
-                telegram_id=callback_data.user_id,
-                status=should_approve,  # Одобряем, если нет голосов против
-                bot=callback.bot
-            )
-            await callback.answer("Ваш голос учтен. Решение принято.")
-        else:
-            # Еще не все админы проголосовали и нет голосов против
-            logging.info(f"Waiting for more votes for user {callback_data.user_id}: {total_votes}/{total_admins} votes received")
-            await callback.answer("Ваш голос учтен. Ожидаем голоса других администраторов.")
+    # Принимаем решение, если все админы проголосовали, большинство проголосовало или есть хотя бы один голос против
+    if all_voted or any_rejected or majority_voted:
+        # Одобряем только если нет ни одного голоса против
+        should_approve = not any_rejected
+        logging.info(f"Making decision for user {callback_data.user_id}: approved={should_approve}, approved_votes={approved_votes}, rejected_votes={rejected_votes}")
+        
+        # Обновляем статус модерации пользователя
+        # Уведомление пользователю будет отправлено в функции send_notification_in_background
+        user = await update_user_moderation_status(
+            session=session,
+            telegram_id=callback_data.user_id,
+            status=should_approve,  # Одобряем, если нет голосов против
+            bot=callback.bot
+        )
     
     # Удаляем сообщение с кнопками голосования после того, как админ проголосовал
     try:
@@ -386,45 +376,3 @@ async def notify_admins_about_new_user(
     
     logging.info("Finished notifying all admins about new user")
 
-
-async def send_notification_in_background(bot: Bot, user_id: int, status: bool):
-    """
-    Отправить уведомление пользователю о результате модерации в фоновом режиме
-    :param bot: Экземпляр бота
-    :param user_id: ID пользователя
-    :param status: True - одобрен, False - отклонен
-    """
-    try:
-        # Получаем переводчик для отправки сообщений на нужном языке
-        from bot.locales.i18n import i18n
-        
-        # Получаем текст уведомления в зависимости от статуса
-        if status:
-            # Пользователь одобрен
-            notification_text = i18n.user.text.moderation.approved()
-            
-            # Добавляем клавиатуру для одобренных пользователей
-            from bot.keyboards.user_reply import get_main_menu_keyboard
-            keyboard = await get_main_menu_keyboard(i18n)
-            
-            # Отправляем уведомление об одобрении
-            await send_guaranteed_message(
-                bot=bot,
-                user_id=user_id,
-                text=notification_text,
-                reply_markup=keyboard
-            )
-            logging.info(f"Sent approval notification to user {user_id}")
-        else:
-            # Пользователь отклонен
-            notification_text = i18n.user.text.moderation.rejected()
-            
-            # Отправляем уведомление об отклонении
-            await send_guaranteed_message(
-                bot=bot,
-                user_id=user_id,
-                text=notification_text
-            )
-            logging.info(f"Sent rejection notification to user {user_id}")
-    except Exception as e:
-        logging.error(f"Error sending notification to user {user_id}: {e}")
