@@ -1,0 +1,28 @@
+version: '3'
+
+services:
+  private_club:
+    build: ./
+    env_file:
+      - .env
+    environment:
+      - ADMINS_ID
+      - CRYPTO_BOT_API
+      - CRYPTOMUS_KEY
+      - CRYPTOMUS_UUID
+      - LAVA_ID_PROJECT
+      - LAVA_TOKEN_SECRET
+      - TG_TOKEN
+      - YOOKASSA_SECRET_KEY
+      - YOOKASSA_SHOP_ID
+      - YOOMONEY_TOKEN
+      - LINK_CHANNEL
+      - ID_CHANNEL
+      - NAME_CHANNEL
+      - DEBUG=True
+    volumes:
+      - ./logs:/app/logs
+      - ./bot/locales:/app/bot/locales
+      - ./bot/img:/app/bot/img
+      - ./bot/database:/app/bot/database
+    restart: unless-stopped
