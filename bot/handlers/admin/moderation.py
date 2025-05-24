@@ -267,7 +267,7 @@ async def process_moderation_vote(
         return
     
     # Проверяем, достаточно ли голосов для принятия решения
-    total_admins = 4  # Для тестирования используем 2 админа
+    total_admins = 6  # Для тестирования используем 2 админа
     total_votes = len(votes)
     approved_votes = sum(1 for vote in votes if vote.approved)
     rejected_votes = sum(1 for vote in votes if not vote.approved)  # Явный подсчет отклоненных голосов
@@ -321,12 +321,26 @@ async def notify_admins_about_new_user(
         user_id: int,
         username: str = None,
         fullname: str = None,
-        i18n: TranslatorRunner = None
+        i18n: TranslatorRunner = None,
+        session: AsyncSession = None
 ):
     """
     Уведомляет всех администраторов о новом пользователе
     """
     logging.info(f"Attempting to notify admins about new user: {user_id}, username: {username}, fullname: {fullname}")
+    
+    # Проверяем, не был ли пользователь отклонен ранее
+    if session is not None:
+        user = await get_user_tg_id(session, user_id)
+        if user is not None and user.moderation_status is False:
+            logging.info(f"User {user_id} was previously rejected, not sending to moderation again")
+            # Отправляем пользователю сообщение об отказе
+            await send_guaranteed_message(
+                bot=bot,
+                user_id=user_id,
+                text=i18n.user.text.moderation.rejected()
+            )
+            return
     
     # Логируем список администраторов
     logging.info(f"Admins to notify: {Config.ADMINS_ID}")

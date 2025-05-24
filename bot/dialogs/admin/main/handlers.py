@@ -173,12 +173,14 @@ async def show_users(
             sub = user.subscription.strftime('%d.%m.%Y %H:%M') + '✅'
         else:
             sub = '❌'
+        # Проверяем, что lang_tg не None, если None, используем пустую строку
+        lang_tg = user.lang_tg if user.lang_tg is not None else ''
         text += i18n.admin.text.admin_menu.statistic.all_users(
             number=number,
             fullname=user.fullname,
             username=user.username,
             telegram_id=str(user.telegram_id),
-            lang=user.lang_tg,
+            lang=lang_tg,  # Используем проверенное значение
             date=user.date_registered.strftime("%d.%m.%Y %H:%M"),
             subscription=sub
         ) + '\n'

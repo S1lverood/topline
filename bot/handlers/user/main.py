@@ -80,9 +80,16 @@ async def process_start_command(
             moderation_status=moderation_status  # Устанавливаем статус модерации
         )
     
-    # Если это не администратор, отправляем на модерацию
+    # Если это не администратор, проверяем статус модерации
     if not is_admin:
         # Проверяем статус модерации пользователя
+        if user is not None and user.moderation_status is False:
+            # Пользователь был отклонен ранее, отправляем сообщение об отказе
+            logging.info(f"User {message.from_user.id} was previously rejected, blocking access")
+            await message.answer(i18n.user.text.moderation.rejected())
+            return
+        
+        # Проверяем, нужна ли модерация
         needs_moderation = True
         if user is not None and user.moderation_status is not None:
             needs_moderation = not user.moderation_status
@@ -93,99 +100,18 @@ async def process_start_command(
             # Отправляем сообщение пользователю о ожидании модерации
             await message.answer(i18n.user.text.moderation.waiting())
             
-            # Напрямую отправляем сообщения администраторам
-            logging.info(f"CRITICAL: Sending direct notifications to admins about new user: {message.from_user.id}")
+            # Используем функцию notify_admins_about_new_user для отправки уведомлений администраторам
+            logging.info(f"CRITICAL: Sending notifications to admins about new user: {message.from_user.id}")
             
-            # Выводим список администраторов для отладки
-            logging.info(f"CRITICAL: Admin IDs from config: {Config.ADMINS_ID}")
-            
-            # Формируем расширенный текст уведомления с подробной информацией о пользователе
-            user_info = [
-                f"🔔 <b>Новый пользователь ожидает модерации!</b>",
-                f"🔑 <b>ID:</b> <code>{message.from_user.id}</code>"
-            ]
-            
-            # Добавляем имя пользователя, если оно есть
-            if message.from_user.full_name:
-                user_info.append(f"👤 <b>Имя:</b> {message.from_user.full_name}")
-            
-            # Добавляем имя пользователя, если оно есть
-            if message.from_user.username:
-                user_info.append(f"📲 <b>Username:</b> @{message.from_user.username}")
-                user_info.append(f"🔗 <b>Ссылка:</b> <a href='https://t.me/{message.from_user.username}'>@{message.from_user.username}</a>")
-            
-            # Добавляем язык пользователя, если он есть
-            if message.from_user.language_code:
-                user_info.append(f"🌐 <b>Язык:</b> {message.from_user.language_code}")
-                
-            # Добавляем время регистрации
-            from datetime import datetime
-            registration_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            user_info.append(f"📅 <b>Время регистрации:</b> {registration_time}")
-            
-            # Объединяем все строки в одно сообщение
-            notification_text = "\n".join(user_info)
-                
-            # Создаем простую клавиатуру
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-            
-            # Создаем кнопки с использованием ModerationVoteCallback
-            from bot.misc.callback_data import ModerationVoteCallback
-            
-            # Создаем клавиатуру с кнопками модерации
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✅ Одобрить пользователя", 
-                        callback_data=ModerationVoteCallback(user_id=message.from_user.id, approved=True).pack()
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="❌ Отклонить пользователя", 
-                        callback_data=ModerationVoteCallback(user_id=message.from_user.id, approved=False).pack()
-                    )
-                ]
-            ])
-                
-            # Отправляем уведомления всем администраторам
-            notification_sent = False
-            for admin_id in Config.ADMINS_ID:
-                try:
-                    logging.info(f"CRITICAL: Trying to send notification to admin {admin_id}")
-                    await message.bot.send_message(
-                        chat_id=admin_id,
-                        text=notification_text,
-                        reply_markup=keyboard
-                    )
-                    logging.info(f"CRITICAL: Successfully sent direct notification to admin: {admin_id}")
-                    notification_sent = True
-                except Exception as e:
-                    logging.error(f"CRITICAL: Error sending direct notification to admin {admin_id}: {e}")
-            
-            # Если ни одно уведомление не было отправлено, логируем ошибку
-            if not notification_sent:
-                logging.error("CRITICAL: Failed to send notifications to any admin from the config list!")
-            
-            # Логируем результат отправки уведомлений
-            status_message = "Уведомления администраторам отправлены" if notification_sent else "Произошла ошибка при отправке уведомлений"
-            logging.info(f"CRITICAL: Status of notifications: {status_message}")
-            
-            # Пытаемся отправить правила пользователю напрямую
-            try:
-                # Получаем правила группы
-                rules_message = i18n.user.text.group_rules()
-                
-                # Отправляем правила без кнопки
-                await message.answer(
-                    text=rules_message,
-                    parse_mode='HTML'
-                )
-                
-                logging.info(f"Successfully sent rules directly to user: {message.from_user.id}")
-            except Exception as e:
-                logging.error(f"Error sending rules directly to user {message.from_user.id}: {e}")
-            
+            # Вызываем функцию с передачей сессии базы данных
+            await notify_admins_about_new_user(
+                bot=message.bot,
+                user_id=message.from_user.id,
+                username=message.from_user.username,
+                fullname=message.from_user.full_name,
+                i18n=i18n,
+                session=session
+            )
             
             return
         
