@@ -1,12 +1,16 @@
 import logging
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Set
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from fluentogram import TranslatorRunner
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# Список пользователей, которым уже отправлено уведомление об отказе
+# Используем глобальную переменную для отслеживания
+rejection_notifications_sent: Set[int] = set()
 
 from bot.database.crud.create import add_moderation_vote
 from bot.database.crud.get import get_user_tg_id, get_moderation_votes
@@ -91,7 +95,19 @@ async def send_notification_in_background(bot: Bot, user_id: int, status: bool):
         if status:
             notification_text = "Модерация прошла успешно! Теперь вы можете пользоваться ботом."
         else:
-            notification_text = "К сожалению, вам отказано в доступе к боту."
+            # Отправляем сообщение об отказе, но пользователь все равно сможет повторно пройти модерацию
+            # Используем жестко заданный текст вместо импорта из локализации
+            notification_text = ("К сожалению, Вы не прошли модерацию. \n"
+                               "(Один из администраторов против Вашего прибывания) \n\n"
+                               "В доступе к VIP группе\n"
+                               "\"🔥Топ Лайн🔥\" \n\n"
+                               "Отказано!")
+            
+            logging.info(f"User {user_id} was rejected, sending rejection message")
+            
+            # Добавляем дополнительное сообщение о возможности повторной модерации
+            additional_text = "\n\nВы можете повторно попробовать пройти модерацию через 24 часа"
+            notification_text += additional_text
         
         # Отправляем уведомление пользователю
         success = await send_guaranteed_message(
@@ -122,18 +138,9 @@ async def send_notification_in_background(bot: Bot, user_id: int, status: bool):
     except Exception as e:
         logging.error(f"CRITICAL: Error sending notification to user {user_id}: {e}")
         
-    # Очищаем голоса модерации для этого пользователя, чтобы не перегружать базу данных
-    try:
-        from bot.database.crud.delete import delete_moderation_votes
-        from sqlalchemy.ext.asyncio import AsyncSession
-        from bot.database.main import get_session
-        
-        async with get_session() as session:
-            session: AsyncSession
-            await delete_moderation_votes(session, user_id)
-            logging.info(f"CRITICAL: Moderation votes cleared for user {user_id}")
-    except Exception as e:
-        logging.error(f"CRITICAL: Error clearing moderation votes for user {user_id}: {e}")
+    # Примечание: очистка голосов модерации будет происходить в функции update_user_moderation_status
+    # Так как в фоновом режиме у нас нет доступа к сессии базы данных
+    logging.info(f"Skipping vote cleanup for user {user_id} in background task")
 
 
 # Регистрируем обработчик для кнопки "Начать использование бота"
@@ -267,7 +274,7 @@ async def process_moderation_vote(
         return
     
     # Проверяем, достаточно ли голосов для принятия решения
-    total_admins = 6  # Для тестирования используем 2 админа
+    total_admins = 2  # Устанавливаем 2 админа
     total_votes = len(votes)
     approved_votes = sum(1 for vote in votes if vote.approved)
     rejected_votes = sum(1 for vote in votes if not vote.approved)  # Явный подсчет отклоненных голосов
@@ -285,14 +292,41 @@ async def process_moderation_vote(
         should_approve = not any_rejected
         logging.info(f"Making decision for user {callback_data.user_id}: approved={should_approve}, approved_votes={approved_votes}, rejected_votes={rejected_votes}")
         
-        # Обновляем статус модерации пользователя
-        # Уведомление пользователю будет отправлено в функции send_notification_in_background
-        user = await update_user_moderation_status(
-            session=session,
-            telegram_id=callback_data.user_id,
-            status=should_approve,  # Одобряем, если нет голосов против
-            bot=callback.bot
-        )
+        # Проверяем, изменился ли статус модерации
+        if user.moderation_status != should_approve:
+            # Обновляем статус модерации пользователя только если он изменился
+            # Уведомление пользователю будет отправлено в функции send_notification_in_background
+            user = await update_user_moderation_status(
+                session=session,
+                telegram_id=callback_data.user_id,
+                status=should_approve,  # Одобряем, если нет голосов против
+                bot=callback.bot
+            )
+            logging.info(f"Updated moderation status for user {callback_data.user_id} to {should_approve}")
+        else:
+            logging.info(f"Moderation status for user {callback_data.user_id} already set to {should_approve}, skipping update")
+            
+            # Если статус не изменился, но это голос против и администратор голосует против, отправляем уведомление напрямую
+            if not should_approve and callback_data.approved is False:
+                # Используем глобальную переменную для отслеживания отправленных уведомлений
+                global rejection_notifications_sent
+                
+                # Проверяем, было ли уже отправлено уведомление этому пользователю
+                if callback_data.user_id not in rejection_notifications_sent:
+                    logging.info(f"Sending rejection notification to user {callback_data.user_id}")
+                    # Отправляем уведомление напрямую
+                    await send_notification_in_background(callback.bot, callback_data.user_id, False)
+                    # Добавляем пользователя в список уведомленных
+                    rejection_notifications_sent.add(callback_data.user_id)
+                else:
+                    logging.info(f"Rejection notification already sent to user {callback_data.user_id}, skipping")
+                    
+                # Очищаем список уведомленных пользователей, если он слишком большой
+                if len(rejection_notifications_sent) > 100:
+                    logging.info("Clearing rejection notifications list")
+                    rejection_notifications_sent.clear()
+    else:
+        logging.info(f"Not enough votes to make a decision for user {callback_data.user_id} yet")
     
     # Удаляем сообщение с кнопками голосования после того, как админ проголосовал
     try:
@@ -321,26 +355,12 @@ async def notify_admins_about_new_user(
         user_id: int,
         username: str = None,
         fullname: str = None,
-        i18n: TranslatorRunner = None,
-        session: AsyncSession = None
+        i18n: TranslatorRunner = None
 ):
     """
     Уведомляет всех администраторов о новом пользователе
     """
     logging.info(f"Attempting to notify admins about new user: {user_id}, username: {username}, fullname: {fullname}")
-    
-    # Проверяем, не был ли пользователь отклонен ранее
-    if session is not None:
-        user = await get_user_tg_id(session, user_id)
-        if user is not None and user.moderation_status is False:
-            logging.info(f"User {user_id} was previously rejected, not sending to moderation again")
-            # Отправляем пользователю сообщение об отказе
-            await send_guaranteed_message(
-                bot=bot,
-                user_id=user_id,
-                text=i18n.user.text.moderation.rejected()
-            )
-            return
     
     # Логируем список администраторов
     logging.info(f"Admins to notify: {Config.ADMINS_ID}")
