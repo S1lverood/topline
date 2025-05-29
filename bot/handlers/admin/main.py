@@ -10,7 +10,8 @@ admin_router.callback_query.filter(IsAdmin())
 
 # Включаем модуль модерации
 moderation_router.message.filter(IsAdmin())
-moderation_router.callback_query.filter(IsAdmin())
+# Убираем фильтр для колбэков, так как он мешает обработке колбэков от разных пользователей
+# moderation_router.callback_query.filter(IsAdmin())
 
 admin_router.include_routers(
     admin_menu_dialog,

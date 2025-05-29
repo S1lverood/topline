@@ -23,21 +23,21 @@ async def reply_message(
     return kb.as_markup()
 
 
-async def moderation_keyboard(
-        i18n: TranslatorRunner,
-        user_id: int
-) -> InlineKeyboardMarkup:
-    """
-    Клавиатура для модерации пользователя
-    """
-    kb = InlineKeyboardBuilder()
-    kb.button(
-        text="✅ Одобрить",  # Галочка Одобрить
-        callback_data=ModerationVoteCallback(user_id=user_id, approved=True)
-    )
-    kb.button(
-        text="❌ Отклонить",  # Крестик Отклонить
-        callback_data=ModerationVoteCallback(user_id=user_id, approved=False)
-    )
-    kb.adjust(2)
-    return kb.as_markup()
+# async def moderation_keyboard(  НЕ НУЖНО
+#         i18n: TranslatorRunner,
+#         user_id: int
+# ) -> InlineKeyboardMarkup:
+#     """
+#     Клавиатура для модерации пользователя
+#     """
+#     kb = InlineKeyboardBuilder()
+#     kb.button(
+#         text="✅ Одобрить",  # Галочка Одобрить
+#         callback_data=ModerationVoteCallback(user_id=user_id, approved=True)
+#     )
+#     kb.button(
+#         text="❌ Отклонить",  # Крестик Отклонить
+#         callback_data=ModerationVoteCallback(user_id=user_id, approved=False)
+#     )
+#     kb.adjust(2)
+#     return kb.as_markup()

@@ -1,5 +1,4 @@
-from unittest import result
-
+from aiogram import Bot
 from aiogram.filters import Filter
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +10,16 @@ from bot.service.service import check_admin
 
 class IsAdmin(Filter):
 
-    async def __call__(self, message: Message) -> bool:
-        return await check_admin(message.from_user.id)
+    async def __call__(self, event) -> bool:
+        # Проверяем, является ли событие сообщением или колбэком
+        if isinstance(event, Message):
+            user_id = event.from_user.id
+        elif isinstance(event, CallbackQuery):
+            user_id = event.from_user.id
+        else:
+            return False
+            
+        return await check_admin(user_id)
 
 
 
@@ -30,6 +37,14 @@ class IsBannedCallback(Filter):
 
 async def check_blocked(session, telegram_id):
     user = await get_user_tg_id(session, telegram_id)
+    # Проверяем, что пользователь существует в базе данных
+    if user is None:
+        # Если пользователя нет в базе, разрешаем доступ (он будет создан при первом взаимодействии)
+        return True
+    
+    # Проверяем, является ли пользователь администратором
     if user.telegram_id in Config.ADMINS_ID:
         return True
+    
+    # Проверяем, не заблокирован ли пользователь
     return not user.blocked

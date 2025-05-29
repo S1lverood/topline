@@ -15,7 +15,7 @@ rejection_notifications_sent: Set[int] = set()
 from bot.database.crud.create import add_moderation_vote
 from bot.database.crud.get import get_user_tg_id, get_moderation_votes
 from bot.database.crud.update import update_user_moderation_status
-from bot.keyboards.admin_inline import moderation_keyboard
+# from bot.keyboards.admin_inline import moderation_keyboard
 from bot.misc import Config
 from bot.misc.callback_data import ModerationVoteCallback, RulesAcceptCallback
 
@@ -29,7 +29,7 @@ moderation_router = Router()
 __all__ = ["moderation_router", "notify_admins_about_new_user", "send_guaranteed_message", "process_rules_accept"]
 
 
-async def send_guaranteed_message(bot, user_id: int, text: str, reply_markup=None, parse_mode=None) -> bool:
+async def send_guaranteed_message(bot, user_id: int, text: str, reply_markup=None, parse_mode=None, is_approval=True) -> bool:
     """
     Гарантированная отправка сообщения пользователю с использованием разных методов
     :param bot: Экземпляр бота
@@ -37,111 +37,226 @@ async def send_guaranteed_message(bot, user_id: int, text: str, reply_markup=Non
     :param text: Текст сообщения
     :param reply_markup: Клавиатура (опционально)
     :param parse_mode: Режим форматирования текста (опционально)
+    :param is_approval: True если это сообщение об одобрении, False если об отклонении
     :return: True если удалось отправить сообщение, False в противном случае
     """
+    message_type = "approval" if is_approval else "rejection"
+    logging.info(f"CRITICAL: Starting guaranteed message delivery to user {user_id} (type: {message_type})")
+    
     success = False
     attempts = 0
-    max_attempts = 3
+    max_attempts = 5  # Увеличиваем максимальное количество попыток
+    
+    # Увеличиваем задержку между попытками
+    delay_seconds = 1.0
+    
+    # Сохраняем все ошибки для анализа
+    errors = []
     
     # Пробуем отправить сообщение несколько раз с задержкой
     while not success and attempts < max_attempts:
         attempts += 1
+        logging.info(f"CRITICAL: Attempt {attempts}/{max_attempts} to send message to user {user_id}")
         
         # Метод 1: Стандартный метод send_message
         try:
+            logging.info(f"CRITICAL: Trying standard method for user {user_id} (attempt {attempts})")
             await bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
             logging.info(f"CRITICAL: Message sent to user {user_id} using standard method (attempt {attempts})")
             success = True
+            # Добавляем дополнительную задержку после успешной отправки
+            await asyncio.sleep(1.0)
             break
         except Exception as e:
-            logging.error(f"CRITICAL: Error sending message to user {user_id} using standard method (attempt {attempts}): {e}")
-            await asyncio.sleep(0.5)  # Небольшая задержка перед следующей попыткой
+            error_msg = f"Error sending message to user {user_id} using standard method (attempt {attempts}): {e}"
+            logging.error(f"CRITICAL: {error_msg}")
+            errors.append(f"Standard method: {str(e)}")
+            await asyncio.sleep(delay_seconds)  # Задержка перед следующей попыткой
+            delay_seconds *= 1.5  # Увеличиваем задержку с каждой попыткой
         
         # Метод 2: Прямой вызов API
         try:
+            logging.info(f"CRITICAL: Trying direct API method for user {user_id} (attempt {attempts})")
             from aiogram.methods.send_message import SendMessage
             result = await bot(SendMessage(chat_id=user_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode))
             logging.info(f"CRITICAL: Message sent to user {user_id} using direct API (attempt {attempts}): {result}")
             success = True
+            # Добавляем дополнительную задержку после успешной отправки
+            await asyncio.sleep(1.0)
             break
         except Exception as e:
-            logging.error(f"CRITICAL: Error sending message to user {user_id} using direct API (attempt {attempts}): {e}")
-            await asyncio.sleep(0.5)  # Небольшая задержка перед следующей попыткой
+            error_msg = f"Error sending message to user {user_id} using direct API (attempt {attempts}): {e}"
+            logging.error(f"CRITICAL: {error_msg}")
+            errors.append(f"Direct API: {str(e)}")
+            await asyncio.sleep(delay_seconds)  # Задержка перед следующей попыткой
+            delay_seconds *= 1.5  # Увеличиваем задержку с каждой попыткой
+            
+        # Метод 3: Использование copy_message для отправки сообщения через бота
+        if not success and attempts < max_attempts:
+            try:
+                logging.info(f"CRITICAL: Trying copy_message method for user {user_id} (attempt {attempts})")
+                # Создаем временное сообщение в специальном чате для копирования
+                temp_chat_id = Config.TEMP_CHAT_ID if hasattr(Config, 'TEMP_CHAT_ID') else Config.ADMINS_ID[0]
+                
+                # Отправляем сообщение во временный чат
+                temp_message = await bot.send_message(
+                    chat_id=temp_chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+                
+                # Копируем сообщение пользователю
+                await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=temp_chat_id,
+                    message_id=temp_message.message_id
+                )
+                
+                # Удаляем временное сообщение
+                await bot.delete_message(chat_id=temp_chat_id, message_id=temp_message.message_id)
+                
+                logging.info(f"CRITICAL: Message sent to user {user_id} using copy_message method (attempt {attempts})")
+                success = True
+                await asyncio.sleep(1.0)
+                break
+            except Exception as e:
+                error_msg = f"Error sending message to user {user_id} using copy_message method (attempt {attempts}): {e}"
+                logging.error(f"CRITICAL: {error_msg}")
+                errors.append(f"Copy message: {str(e)}")
+                await asyncio.sleep(delay_seconds)  # Задержка перед следующей попыткой
+                delay_seconds *= 1.5  # Увеличиваем задержку с каждой попыткой
     
     # Если все попытки не удались, пробуем отправить простое сообщение
     if not success:
         try:
             from aiogram.methods.send_message import SendMessage
-            # Упрощенное сообщение
-            simple_text = "Вы были одобрены. Отправьте /start для начала использования бота."
+            # Упрощенное сообщение в зависимости от типа уведомления
+            if is_approval:
+                simple_text = "Вы были одобрены. Отправьте /start для начала использования бота."
+            else:
+                simple_text = "К сожалению, Вы не прошли модерацию. Вы можете повторно попробовать через 24 часа."
+                
             result = await bot(SendMessage(chat_id=user_id, text=simple_text))
             logging.info(f"CRITICAL: Simple message sent to user {user_id} using direct API: {result}")
             success = True
         except Exception as e:
             logging.error(f"CRITICAL: Error sending simple message to user {user_id} using direct API: {e}")
     
+    # Если не удалось отправить сообщение после всех попыток, логируем это
+    if not success:
+        error_summary = "\n".join(errors)
+        logging.error(f"CRITICAL: Failed to send message to user {user_id} after {max_attempts} attempts. Errors: {error_summary}")
+        
+        # Если это уведомление об отклонении, добавляем пользователя в список уведомленных,
+        # чтобы не пытаться отправить ему сообщение повторно
+        if not is_approval:
+            global rejection_notifications_sent
+            rejection_notifications_sent.add(user_id)
+            logging.info(f"CRITICAL: Added user {user_id} to rejection_notifications_sent list after failed attempts")
+            logging.info(f"CRITICAL: Current rejection_notifications_sent list size: {len(rejection_notifications_sent)}")
+        
+        # Пытаемся уведомить администраторов о проблеме
+        try:
+            admin_notification = f"CRITICAL: Не удалось отправить уведомление пользователю {user_id} после {max_attempts} попыток"
+            for admin_id in Config.ADMINS_ID[:1]:  # Уведомляем только первого админа в списке
+                await bot.send_message(chat_id=admin_id, text=admin_notification)
+                logging.info(f"CRITICAL: Notified admin {admin_id} about failed message delivery to user {user_id}")
+        except Exception as e:
+            logging.error(f"CRITICAL: Failed to notify admin about message delivery failure: {e}")
+    else:
+        logging.info(f"CRITICAL: Successfully sent message to user {user_id} after {attempts} attempts")
+    
     return success
 
 
-async def send_notification_in_background(bot: Bot, user_id: int, status: bool):
+async def send_notification_in_background(bot: Bot, user_id: int, status: bool) -> None:
     """
     Отправляет уведомление пользователю в фоновом режиме
     :param bot: Экземпляр бота
     :param user_id: ID пользователя
     :param status: True - одобрен, False - отклонен
     """
+    logging.info(f"CRITICAL: Starting notification process for user {user_id}, status: {status}")
+    logging.info(f"CRITICAL: Bot info: {bot.id}")
+    logging.info(f"CRITICAL: Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Проверяем, активен ли бот
     try:
-        # Определяем текст уведомления в зависимости от статуса
-        if status:
-            notification_text = "Модерация прошла успешно! Теперь вы можете пользоваться ботом."
-        else:
-            # Отправляем сообщение об отказе, но пользователь все равно сможет повторно пройти модерацию
-            # Используем жестко заданный текст вместо импорта из локализации
-            notification_text = ("К сожалению, Вы не прошли модерацию. \n"
-                               "(Один из администраторов против Вашего прибывания) \n\n"
-                               "В доступе к VIP группе\n"
-                               "\"🔥Топ Лайн🔥\" \n\n"
-                               "Отказано!")
-            
-            logging.info(f"User {user_id} was rejected, sending rejection message")
-            
-            # Добавляем дополнительное сообщение о возможности повторной модерации
-            additional_text = "\n\nВы можете повторно попробовать пройти модерацию через 24 часа"
-            notification_text += additional_text
-        
-        # Отправляем уведомление пользователю
-        success = await send_guaranteed_message(
-            bot=bot,
-            user_id=user_id,
-            text=notification_text
-        )
-        
-        logging.info(f"CRITICAL: Notification sent to user {user_id}, status: {status}, success: {success}")
-        
-        # Если пользователь был одобрен, отправляем ему дополнительное сообщение с инструкциями
-        if status and success:
-            welcome_message = (
-                "🎉 <b>Добро пожаловать в наш клуб!</b> 🎉\n\n"
-                "Теперь вы можете использовать все функции бота и получить доступ к эксклюзивному контенту.\n\n"
-                "Отправьте /start, чтобы начать использование бота."
+        bot_info = await bot.get_me()
+        logging.info(f"CRITICAL: Bot is active: {bot_info.id}")
+    except Exception as e:
+        logging.error(f"CRITICAL: Bot is not active: {e}")
+        return
+    
+    # Отправляем уведомление пользователю о результате модерации
+    if status:  # Пользователь одобрен
+        try:
+            logging.info(f"CRITICAL: Preparing approval notification for user {user_id}")
+            # Отправляем сообщение об одобрении
+            message = await bot.send_message(
+                chat_id=user_id,
+                text="Модерация прошла успешно! Теперь вы можете пользоваться ботом."
             )
-            
-            await send_guaranteed_message(
+            logging.info(f"CRITICAL: Direct message sent to user {user_id}: {message.message_id}")
+        except Exception as e:
+            logging.error(f"CRITICAL: Error sending approval notification to user {user_id}: {e}")
+            # Пробуем отправить через гарантированную доставку
+            try:
+                await send_guaranteed_message(
+                    bot=bot,
+                    user_id=user_id,
+                    text="Модерация прошла успешно! Теперь вы можете пользоваться ботом.",
+                    is_approval=True
+                )
+            except Exception as backup_error:
+                logging.error(f"CRITICAL: Backup method also failed for user {user_id}: {backup_error}")
+    else:  # Пользователь отклонен
+        try:
+            logging.info(f"CRITICAL: Preparing rejection notification for user {user_id}")
+            # Отправляем сообщение об отклонении
+            message = await bot.send_message(
+                chat_id=user_id,
+                text="К сожалению, ваша заявка на использование бота была отклонена администратором."
+            )
+            logging.info(f"CRITICAL: Direct message sent to user {user_id}: {message.message_id}")
+        except Exception as e:
+            logging.error(f"CRITICAL: Error sending rejection notification to user {user_id}: {e}")
+            # Пробуем отправить через гарантированную доставку
+            try:
+                await send_guaranteed_message(
+                    bot=bot,
+                    user_id=user_id,
+                    text="К сожалению, ваша заявка на использование бота была отклонена администратором.",
+                    is_approval=False
+                )
+            except Exception as backup_error:
+                logging.error(f"CRITICAL: Backup method also failed for user {user_id}: {backup_error}")
+
+    # Отправляем дополнительное приветственное сообщение, если пользователь был одобрен
+    if status:
+        logging.info(f"CRITICAL: Attempting to send welcome message to user {user_id}")
+        try:
+            # Отправляем приветственное сообщение
+            welcome_text = "Добро пожаловать! Теперь вы можете использовать все функции бота.\nОтправьте /start чтобы начать"
+
+            # Используем гарантированную отправку сообщения
+            welcome_success = await send_guaranteed_message(
                 bot=bot,
                 user_id=user_id,
-                text=welcome_message,
-                parse_mode='HTML'
+                text=welcome_text,
+                is_approval=True
             )
-            
-            logging.info(f"CRITICAL: Welcome message sent to user {user_id}")
-    
-    except Exception as e:
-        logging.error(f"CRITICAL: Error sending notification to user {user_id}: {e}")
-        
-    # Примечание: очистка голосов модерации будет происходить в функции update_user_moderation_status
-    # Так как в фоновом режиме у нас нет доступа к сессии базы данных
-    logging.info(f"Skipping vote cleanup for user {user_id} in background task")
 
+            if welcome_success:
+                logging.info(f"CRITICAL: Welcome message successfully sent to user {user_id}")
+            else:
+                logging.error(f"CRITICAL: Failed to send welcome message to user {user_id}")
+        except Exception as e:
+            logging.error(f"CRITICAL: Error sending welcome message to user {user_id}: {e}")
+    
+    # Завершаем выполнение функции
+    logging.info(f"CRITICAL: Notification process for user {user_id} completed in background task")
 
 # Регистрируем обработчик для кнопки "Начать использование бота"
 @moderation_router.callback_query(F.data == "start_bot")
@@ -233,121 +348,239 @@ async def process_rules_accept(callback: CallbackQuery, i18n: TranslatorRunner):
 async def handle_rules_accept(callback: CallbackQuery, i18n: TranslatorRunner):
     await process_rules_accept(callback, i18n)
 
-# Регистрируем обработчик голосования за модерацию
-@moderation_router.callback_query(ModerationVoteCallback.filter())
-async def process_moderation_vote(
-        callback: CallbackQuery,
-        callback_data: ModerationVoteCallback,
-        session: AsyncSession,
-        i18n: TranslatorRunner
-) -> None:
-    """
-    Обработчик голосования администратора за модерацию пользователя
-    """
-    logging.info(f"Admin {callback.from_user.id} voted for user {callback_data.user_id}, approved: {callback_data.approved}")
-    
-    # Добавляем голос в базу данных
-    vote = await add_moderation_vote(
-        session=session,
-        user_id=callback_data.user_id,
-        admin_id=callback.from_user.id,
-        approved=callback_data.approved
-    )
-    
-    if vote is None:
-        logging.error(f"Error adding vote for user {callback_data.user_id} by admin {callback.from_user.id}")
-        await callback.answer("Произошла ошибка при голосовании. Попробуйте еще раз.")
-        return
-    
-    # Получаем все голоса для этого пользователя
-    votes = await get_moderation_votes(session, callback_data.user_id)
-    if not votes:
-        logging.error(f"No votes found for user {callback_data.user_id}")
-        await callback.answer("Произошла ошибка при получении голосов. Попробуйте еще раз.")
-        return
-    
-    # Получаем пользователя из базы данных
-    user = await get_user_tg_id(session, callback_data.user_id)
-    if not user:
-        logging.error(f"User {callback_data.user_id} not found in database")
-        await callback.answer("Пользователь не найден в базе данных.")
-        return
-    
-    # Проверяем, достаточно ли голосов для принятия решения
-    total_admins = 2  # Устанавливаем 2 админа
-    total_votes = len(votes)
-    approved_votes = sum(1 for vote in votes if vote.approved)
-    rejected_votes = sum(1 for vote in votes if not vote.approved)  # Явный подсчет отклоненных голосов
-    
-    any_rejected = rejected_votes > 0
-    all_voted = total_votes >= total_admins
-    majority_voted = total_votes >= (total_admins // 2 + 1)  # Большинство админов проголосовало
-    
-    logging.info(f"Votes for user {callback_data.user_id}: total={total_votes}, approved={approved_votes}, rejected={rejected_votes}")
-    logging.info(f"Decision criteria: any_rejected={any_rejected}, all_voted={all_voted}, majority_voted={majority_voted}")
-    
-    # Принимаем решение, если все админы проголосовали, большинство проголосовало или есть хотя бы один голос против
-    if all_voted or any_rejected or majority_voted:
-        # Одобряем только если нет ни одного голоса против
-        should_approve = not any_rejected
-        logging.info(f"Making decision for user {callback_data.user_id}: approved={should_approve}, approved_votes={approved_votes}, rejected_votes={rejected_votes}")
-        
-        # Проверяем, изменился ли статус модерации
-        if user.moderation_status != should_approve:
-            # Обновляем статус модерации пользователя только если он изменился
-            # Уведомление пользователю будет отправлено в функции send_notification_in_background
-            user = await update_user_moderation_status(
-                session=session,
-                telegram_id=callback_data.user_id,
-                status=should_approve,  # Одобряем, если нет голосов против
-                bot=callback.bot
-            )
-            logging.info(f"Updated moderation status for user {callback_data.user_id} to {should_approve}")
-        else:
-            logging.info(f"Moderation status for user {callback_data.user_id} already set to {should_approve}, skipping update")
-            
-            # Если статус не изменился, но это голос против и администратор голосует против, отправляем уведомление напрямую
-            if not should_approve and callback_data.approved is False:
-                # Используем глобальную переменную для отслеживания отправленных уведомлений
-                global rejection_notifications_sent
-                
-                # Проверяем, было ли уже отправлено уведомление этому пользователю
-                if callback_data.user_id not in rejection_notifications_sent:
-                    logging.info(f"Sending rejection notification to user {callback_data.user_id}")
-                    # Отправляем уведомление напрямую
-                    await send_notification_in_background(callback.bot, callback_data.user_id, False)
-                    # Добавляем пользователя в список уведомленных
-                    rejection_notifications_sent.add(callback_data.user_id)
-                else:
-                    logging.info(f"Rejection notification already sent to user {callback_data.user_id}, skipping")
-                    
-                # Очищаем список уведомленных пользователей, если он слишком большой
-                if len(rejection_notifications_sent) > 100:
-                    logging.info("Clearing rejection notifications list")
-                    rejection_notifications_sent.clear()
-    else:
-        logging.info(f"Not enough votes to make a decision for user {callback_data.user_id} yet")
-    
-    # Удаляем сообщение с кнопками голосования после того, как админ проголосовал
-    try:
-        await callback.message.delete()
-        logging.info(f"Deleted moderation message for admin {callback.from_user.id} after voting")
-    except Exception as e:
-        logging.error(f"Error deleting moderation message: {e}")
-    
-    # Отправляем новое сообщение администратору о его голосе
-    vote_type = "ОДОБРЕНИЕ" if callback_data.approved else "ОТКЛОНЕНИЕ"
-    try:
-        await callback.bot.send_message(
-            chat_id=callback.from_user.id,
-            text=f"Пользователь ID: {callback_data.user_id} - Вы проголосовали за {vote_type}"
-        )
-    except Exception as e:
-        logging.error(f"Error sending notification to admin {callback.from_user.id}: {e}")
-    
-    # Отвечаем на callback
-    vote_text = "одобрение" if callback_data.approved else "отклонение"
-    await callback.answer(i18n.admin.text.moderation.vote_counted(vote_type=vote_text))
+# Регистрируем обработчик голосования за модерацию  ПЕРЕНЕСЕНО В user/main.py
+# @moderation_router.callback_query(ModerationVoteCallback.filter())
+# async def process_moderation_vote(
+#         callback: CallbackQuery,
+#         callback_data: ModerationVoteCallback,
+#         session: AsyncSession,
+#         i18n: TranslatorRunner
+# ) -> None:
+#     """
+#     Обработчик голосования администратора за модерацию пользователя
+#     """
+#     # Добавляем расширенное логирование для отслеживания проблем
+#     logging.info(f"CRITICAL: Received moderation vote callback from admin {callback.from_user.id} for user {callback_data.user_id}")
+#     logging.info(f"CRITICAL: Vote details - approved: {callback_data.approved}, callback_id: {callback.id}")
+#     logging.info(f"CRITICAL: Full callback data: {callback_data}")
+#     logging.info(f"CRITICAL: Callback message: {callback.message.message_id if callback.message else 'None'}")
+#     logging.info(f"CRITICAL: Admin info: {callback.from_user.id}, {callback.from_user.username}, {callback.from_user.full_name}")
+#     logging.info(f"CRITICAL: Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+#     logging.info(f"CRITICAL: Bot info: {callback.bot.id}")
+#     logging.info(f"CRITICAL: Session info: {session.__class__.__name__}")
+#     logging.info(f"CRITICAL: i18n info: {i18n.__class__.__name__}")
+#
+#     try:
+#         logging.info(f"Admin {callback.from_user.id} voted for user {callback_data.user_id}, approved: {callback_data.approved}")
+#     except Exception as e:
+#         logging.error(f"CRITICAL: Error in initial logging: {e}")
+#         # Продолжаем выполнение функции, несмотря на ошибку в логировании
+#
+#     # Проверяем текущий статус пользователя перед добавлением голоса
+#     # Это позволит избежать повторной модерации уже одобренных пользователей
+#     current_user = await get_user_tg_id(session, callback_data.user_id)
+#     if current_user and current_user.moderation_status is True and callback_data.approved is True:
+#         logging.info(f"User {callback_data.user_id} is already approved, skipping moderation process")
+#         await callback.answer(f"Пользователь {callback_data.user_id} уже одобрен")
+#
+#         # Удаляем сообщение с кнопками голосования
+#         try:
+#             await callback.message.delete()
+#             logging.info(f"Deleted moderation message for admin {callback.from_user.id} after skipping")
+#         except Exception as e:
+#             logging.error(f"Error deleting moderation message: {e}")
+#
+#         # Отправляем сообщение администратору
+#         try:
+#             await callback.bot.send_message(
+#                 chat_id=callback.from_user.id,
+#                 text=f"Пользователь ID: {callback_data.user_id} уже был одобрен ранее."
+#             )
+#         except Exception as e:
+#             logging.error(f"Error sending notification to admin {callback.from_user.id}: {e}")
+#
+#         return
+#
+#     # Добавляем голос в базу данных
+#     vote = await add_moderation_vote(
+#         session=session,
+#         user_id=callback_data.user_id,
+#         admin_id=callback.from_user.id,
+#         approved=callback_data.approved
+#     )
+#
+#     if vote is None:
+#         logging.error(f"Error adding vote for user {callback_data.user_id} by admin {callback.from_user.id}")
+#         await callback.answer("Произошла ошибка при голосовании. Попробуйте еще раз.")
+#         return
+#
+#     # Получаем все голоса для этого пользователя
+#     try:
+#         logging.info(f"CRITICAL: Getting all votes for user {callback_data.user_id}")
+#         votes = await get_moderation_votes(session, callback_data.user_id)
+#         logging.info(f"CRITICAL: Received {len(votes)} votes for user {callback_data.user_id}")
+#
+#         # Проверяем и логируем каждый голос
+#         for i, vote in enumerate(votes):
+#             logging.info(f"CRITICAL: Vote {i+1} details - admin_id: {vote.admin_id}, approved: {vote.approved}")
+#
+#         if not votes:
+#             logging.error(f"CRITICAL: No votes found for user {callback_data.user_id}")
+#
+#             # Пробуем получить голос напрямую
+#             try:
+#                 # Импортируем функцию для получения голоса напрямую, если она существует
+#                 from bot.database.crud.get import get_user_moderation_vote
+#                 direct_vote = await get_user_moderation_vote(session, callback_data.user_id, callback.from_user.id)
+#                 if direct_vote:
+#                     logging.info(f"CRITICAL: Found direct vote for user {callback_data.user_id} from admin {callback.from_user.id}")
+#                     votes = [direct_vote]
+#                 else:
+#                     logging.error(f"CRITICAL: No direct vote found for user {callback_data.user_id} from admin {callback.from_user.id}")
+#                     await callback.answer("Произошла ошибка при получении голосов. Попробуйте еще раз.")
+#                     return
+#             except ImportError:
+#                 # Если функция не существует, используем текущий голос
+#                 logging.info(f"CRITICAL: get_user_moderation_vote not found, using current vote")
+#                 votes = [vote]
+#     except Exception as e:
+#         logging.error(f"CRITICAL: Error getting votes: {e}")
+#         import traceback
+#         logging.error(f"CRITICAL: Traceback: {traceback.format_exc()}")
+#         await callback.answer("Произошла ошибка при получении голосов. Попробуйте еще раз.")
+#         return
+#
+#     # Получаем пользователя из базы данных
+#     user = await get_user_tg_id(session, callback_data.user_id)
+#     if not user:
+#         logging.error(f"User {callback_data.user_id} not found in database")
+#         await callback.answer("Пользователь не найден в базе данных.")
+#         return
+#
+#     # Получаем все записи пользователя в базе данных
+#     # Это позволит обработать все запросы пользователя на модерацию,
+#     # независимо от того, на какое сообщение ответил администратор
+#     try:
+#         from sqlalchemy import select, desc
+#         # Используем правильный путь импорта модели User
+#         from bot.database.models.main import User
+#
+#         # Получаем все записи пользователя в базе данных
+#         # Используем поле subscription для сортировки по времени
+#         stmt = select(User).filter(User.telegram_id == callback_data.user_id).order_by(desc(User.subscription))
+#         result = await session.execute(stmt)
+#         all_user_records = result.scalars().all()
+#
+#         if not all_user_records:
+#             logging.error(f"No user records found for user {callback_data.user_id} in database")
+#             await callback.answer("Пользователь не найден в базе данных.")
+#             return
+#
+#         # Получаем самую последнюю запись пользователя
+#         latest_user = all_user_records[0] if all_user_records else None
+#
+#         if latest_user and latest_user.id != user.id:
+#             logging.info(f"Found newer moderation request for user {callback_data.user_id}. Using that instead.")
+#             user = latest_user
+#             logging.info(f"Switched to newer request: user ID {user.id}, subscription time {user.subscription}")
+#
+#         # Сохраняем все ID записей пользователя для последующего обновления
+#         user_record_ids = [record.id for record in all_user_records]
+#         logging.info(f"Found {len(user_record_ids)} records for user {callback_data.user_id}: {user_record_ids}")
+#     except Exception as e:
+#         logging.error(f"Error checking for user records: {e}")
+#         import traceback
+#         logging.error(f"Traceback: {traceback.format_exc()}")
+#         # Продолжаем с текущим пользователем в случае ошибки
+#         user_record_ids = [user.id] if user else []
+#
+#     # Проверяем, достаточно ли голосов для принятия решения
+#     total_admins = 1  # Устанавливаем 1 админа для принятия решения
+#     total_votes = len(votes)
+#     approved_votes = sum(1 for vote in votes if vote.approved)
+#     rejected_votes = sum(1 for vote in votes if not vote.approved)  # Явный подсчет отклоненных голосов
+#
+#     any_rejected = rejected_votes > 0  # Любой голос против
+#     any_approved = approved_votes > 0  # Любой голос за
+#     all_voted = total_votes >= total_admins  # Все проголосовали (хотя бы один)
+#     majority_voted = True  # Всегда считаем, что большинство за, так как нужен только один голос
+#
+#     logging.info(f"Votes for user {callback_data.user_id}: total={total_votes}, approved={approved_votes}, rejected={rejected_votes}")
+#     logging.info(f"Decision criteria: any_rejected={any_rejected}, all_voted={all_voted}, majority_voted={majority_voted}")
+#
+#     # Принимаем решение о модерации
+#     # Для одного администратора достаточно любого голоса
+#     if any_rejected or any_approved:
+#         # Одобряем только если нет ни одного голоса против
+#         should_approve = not any_rejected
+#         logging.info(f"Making decision for user {callback_data.user_id}: approved={should_approve}, approved_votes={approved_votes}, rejected_votes={rejected_votes}")
+#
+#         # Проверяем, изменился ли статус модерации
+#         current_status = user.moderation_status if user else None
+#         logging.info(f"Current moderation status for user {callback_data.user_id}: {current_status}, should be: {should_approve}")
+#
+#         # Всегда обновляем статус, даже если он не изменился
+#         # Это решает проблему с "зависанием" модерации
+#         # Отправляем уведомление администратору о результате модерации
+#         status_text = "одобрен" if should_approve else "отклонен"
+#         admin_notification = f"Пользователь с ID {callback_data.user_id} был {status_text}."
+#         logging.info(f"CRITICAL: Attempting to send notification to admin {callback.from_user.id} with text: {admin_notification}")
+#
+#         try:
+#             # Обновляем статус модерации пользователя
+#             # Уведомление пользователю будет отправлено в функции send_notification_in_background
+#             updated_user = await update_user_moderation_status(
+#                 session=session,
+#                 telegram_id=callback_data.user_id,
+#                 status=should_approve,  # Одобряем, если нет голосов против
+#                 bot=callback.bot,
+#                 user_record_ids=user_record_ids  # Передаем все ID записей пользователя для обновления
+#             )
+#             logging.info(f"Updated moderation status for user {callback_data.user_id} to {should_approve}")
+#
+#             # Отправляем уведомление пользователю напрямую из этой функции
+#             # Это дублирование, но оно повышает надежность системы
+#             if should_approve:
+#                 try:
+#                     notification_text = "Модерация прошла успешно! Теперь вы можете пользоваться ботом. Отправьте /start, чтобы начать."
+#                     await callback.bot.send_message(chat_id=callback_data.user_id, text=notification_text)
+#                     logging.info(f"CRITICAL: Direct notification sent to user {callback_data.user_id} about approval")
+#                 except Exception as e:
+#                     logging.error(f"CRITICAL: Error sending direct notification to user {callback_data.user_id}: {e}")
+#
+#             # Отправляем уведомление администратору
+#             await callback.bot.send_message(chat_id=callback.from_user.id, text=admin_notification)
+#             logging.info(f"CRITICAL: Successfully sent moderation result notification to admin {callback.from_user.id}")
+#         except Exception as e:
+#             logging.error(f"CRITICAL: Failed to send notification to admin {callback.from_user.id}: {e}")
+#             import traceback
+#             logging.error(f"CRITICAL: Traceback: {traceback.format_exc()}")
+#
+#         # Удалено условие else, теперь всегда обновляем статус
+#         # Это решает проблему с "зависанием" модерации
+#     else:
+#         logging.info(f"Not enough votes to make a decision for user {callback_data.user_id} yet")
+#
+#     # Удаляем сообщение с кнопками голосования после того, как админ проголосовал
+#     try:
+#         await callback.message.delete()
+#         logging.info(f"Deleted moderation message for admin {callback.from_user.id} after voting")
+#     except Exception as e:
+#         logging.error(f"Error deleting moderation message: {e}")
+#
+#     # Отправляем новое сообщение администратору о его голосе
+#     vote_type = "ОДОБРЕНИЕ" if callback_data.approved else "ОТКЛОНЕНИЕ"
+#     try:
+#         await callback.bot.send_message(
+#             chat_id=callback.from_user.id,
+#             text=f"Пользователь ID: {callback_data.user_id} - Вы проголосовали за {vote_type}"
+#         )
+#     except Exception as e:
+#         logging.error(f"Error sending notification to admin {callback.from_user.id}: {e}")
+#
+#     # Отвечаем на callback
+#     vote_text = "одобрение" if callback_data.approved else "отклонение"
+#     await callback.answer(i18n.admin.text.moderation.vote_counted(vote_type=vote_text))
 
 
 async def notify_admins_about_new_user(
