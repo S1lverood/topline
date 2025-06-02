@@ -49,6 +49,7 @@ user-text-subscription-one_day =
     📢 Внимание ваша подписка закончится через {$day} дн
     Скорее продлите подписку пока она не закончится 😁
 user-text-subscription-end = 😨 Подписка закончилась, скорее возвращайтесь в наше сообщество
+user-text-account-banned = 🚫 Вы были заблокированы администратором. Доступ к боту и группе ограничен.
 user-text-subscription-year = г.
 user-text-subscription-mon = мес.
 user-text-subscription-day = дн.
@@ -143,7 +144,8 @@ admin-text-admin_menu-user_control-account-sub = активна до {$date} ✅
 admin-text-admin_menu-user_control-account-no_sub = Отсутствует ❌
 admin-text-admin_menu-user_control-account-ban = Заблокирован 🔒
 admin-text-admin_menu-user_control-account-un_ban = Разблокирован ✅
-admin-text-admin_menu-user_control-account-ban-alert = Пользователь заблокирован
+admin-text-admin_menu-user_control-account-ban-alert = Пользователь заблокирован ✅
+admin-text-admin_menu-user_control-account-already_banned = Пользователь уже заблокирован ⚠️
 admin-text-admin_menu-user_control-account-un_ban-alert = Пользователь разблокирован
 admin-error-user_not_found = Ошибка! Пользователь не найден
 admin-text-admin_menu-user_control-account-input_message_text = Напишите сообщение для пользователя {$full_name} {$username}
@@ -173,6 +175,7 @@ admin-button-user_control-unban = ❇️ Разблокировать
 admin-button-user_control-message = 📨 Написать клиенту
 admin-button-user_control-add_time = 📆 Изменить время подписки
 admin-button-user_control-payments = 💳 Платежи пользователя
+admin-button-user_control-ban_user = 🚫 Забанить
 
 # Модерация пользователей
 user-text-moderation-waiting = 🌟 Добро пожаловать в 🔥Топ Лайн🔥 VIP! 🌟

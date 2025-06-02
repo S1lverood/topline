@@ -367,7 +367,7 @@ async def process_moderation_vote_callback(callback: types.CallbackQuery,session
         # Продолжаем с текущим пользователем в случае ошибки
         user_record_ids = [user.id] if user else []
 
-    total_admins = 1  # Устанавливаем 1 админа для принятия решения
+    total_admins = 7  # Устанавливаем 1 админа для принятия решения
     total_votes = len(votes)
     approved_votes = sum(1 for vote in votes if vote.approved)
     rejected_votes = sum(1 for vote in votes if not vote.approved)  # Явный подсчет отклоненных голосов

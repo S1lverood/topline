@@ -145,6 +145,7 @@ async def get_user_control_account(
         message_user=i18n.admin.button.user_control.message(),
         add_time=i18n.admin.button.user_control.add_time(),
         payments_user=i18n.admin.button.user_control.payments(),
+        ban_user=i18n.admin.button.user_control.ban_user(),
         back=i18n.user.button.back(),
     )
 

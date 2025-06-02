@@ -20,6 +20,7 @@ from bot.handlers.errors.main import on_unknown_intent, on_unknown_state
 from bot.middlewares.i18n import TranslatorRunnerMiddleware
 from bot.middlewares.session import DbSessionMiddleware
 from bot.middlewares.track_all_users import TrackAllUsersMiddleware
+from bot.middlewares.bot_block_check import BotBlockCheckMiddleware
 from bot.misc import Config
 from bot.handlers.user import user_router
 from bot.handlers.admin import admin_router
@@ -71,6 +72,7 @@ async def start_bot():
     )
     dp.update.outer_middleware(DbSessionMiddleware(sessionmaker))
     dp.message.outer_middleware(TrackAllUsersMiddleware())
+    dp.update.middleware(BotBlockCheckMiddleware())
     translator_hub: TranslatorHub = create_translator_hub()
     dp.update.middleware(TranslatorRunnerMiddleware())
     dp.errors.middleware(TranslatorRunnerMiddleware())

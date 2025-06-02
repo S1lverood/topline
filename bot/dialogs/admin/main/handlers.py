@@ -298,6 +298,50 @@ async def add_time_user_handler(
     await dialog_manager.switch_to(StateAdmin.user_control_add_time)
 
 
+async def ban_user_handler(
+    callback: CallbackQuery,
+    button: Button,
+    dialog_manager: DialogManager
+) -> None:
+    i18n: TranslatorRunner = dialog_manager.middleware_data.get('i18n')
+    session: AsyncSession = dialog_manager.middleware_data.get('session')
+    id_user = dialog_manager.dialog_data.get('id_user')
+    
+    # Получаем пользователя
+    user = await get_user_tg_id(session, id_user)
+    if user is None:
+        await callback.message.answer(
+            i18n.admin.error.user_not_found()
+        )
+        return
+    
+    # Если пользователь еще не заблокирован, блокируем его
+    if not user.blocked:
+        # Устанавливаем флаг blocked в True
+        await user_swith_ban(session, id_user)
+        # Баним пользователя в канале
+        await callback.bot.ban_chat_member(
+            chat_id=Config.ID_CHANNEL,
+            user_id=id_user,
+        )
+        # Отправляем уведомление администратору
+        await callback.answer(i18n.admin.text.admin_menu.user_control.account.ban.alert())
+        # Отправляем сообщение пользователю о блокировке
+        try:
+            await callback.bot.send_message(
+                id_user,
+                i18n.user.text.account.banned()
+            )
+        except Exception as e:
+            logging.info(f'Не удалось отправить сообщение о бане пользователю {id_user}: {e}')
+    else:
+        # Если пользователь уже заблокирован, сообщаем об этом
+        await callback.answer(i18n.admin.text.admin_menu.user_control.account.already_banned())
+    
+    # Возвращаемся в меню управления пользователем
+    await dialog_manager.switch_to(StateAdmin.user_control_menu)
+
+
 async def on_date_selected(
         callback: CallbackQuery,
         widget: Calendar,

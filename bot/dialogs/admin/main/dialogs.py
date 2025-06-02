@@ -164,6 +164,11 @@ admin_menu_dialog = Dialog(
             on_click=show_payments
         ),
         Button(
+            text=Format('{ban_user}'),
+            id='ban_user',
+            on_click=ban_user_handler
+        ),
+        Button(
             text=Format('{back}'),
             id='back',
             on_click=back_admin_menu
