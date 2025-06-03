@@ -36,6 +36,7 @@ class IsBannedCallback(Filter):
 
 
 async def check_blocked(session, telegram_id):
+    import logging
     user = await get_user_tg_id(session, telegram_id)
     # Проверяем, что пользователь существует в базе данных
     if user is None:
@@ -46,5 +47,15 @@ async def check_blocked(session, telegram_id):
     if user.telegram_id in Config.ADMINS_ID:
         return True
     
+    # Проверяем статус модерации пользователя
+    if user.moderation_status is False:
+        logging.info(f"User {telegram_id} access denied: moderation_status is False")
+        return False
+    
     # Проверяем, не заблокирован ли пользователь
-    return not user.blocked
+    if user.blocked:
+        logging.info(f"User {telegram_id} access denied: user is blocked")
+        return False
+    
+    # Если все проверки пройдены, разрешаем доступ
+    return True
