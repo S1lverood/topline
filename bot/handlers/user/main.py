@@ -367,27 +367,27 @@ async def process_moderation_vote_callback(callback: types.CallbackQuery,session
         # Продолжаем с текущим пользователем в случае ошибки
         user_record_ids = [user.id] if user else []
 
-    total_admins = 7  # Общее количество администраторов
-    min_votes_required = 7  # Требуется голосование всех администраторов
+    total_admins = 1  # Общее количество администраторов
+    min_votes_required = 1  # Требуется голосование минимум 1 администратора
     total_votes = len(votes)
     approved_votes = sum(1 for vote in votes if vote.approved)
     rejected_votes = sum(1 for vote in votes if not vote.approved)  # Явный подсчет отклоненных голосов
 
     any_rejected = rejected_votes > 0  # Любой голос против
-    all_approved = approved_votes == total_admins  # Все голоса за
+    any_approved = approved_votes > 0  # Любой голос за
     all_voted = total_votes >= total_admins  # Все проголосовали
 
     logging.info(
         f"Votes for user {user_id}: total={total_votes}, approved={approved_votes}, rejected={rejected_votes}")
     logging.info(
-        f"Decision criteria: any_rejected={any_rejected}, all_voted={all_voted}, all_approved={all_approved}, total_admins={total_admins}")
+        f"Decision criteria: any_rejected={any_rejected}, all_voted={all_voted}, any_approved={any_approved}, min_votes_required={min_votes_required}")
 
-    # Принимаем решение только если все администраторы проголосовали или есть хотя бы один голос против
-    if all_voted or any_rejected:
-        # Одобряем только если все администраторы проголосовали за, отклоняем если хотя бы один против
-        should_approve = all_approved and not any_rejected
+    # Принимаем решение если есть хотя бы один голос
+    if any_approved or any_rejected:
+        # Одобряем если есть хотя бы один голос за и нет голосов против
+        should_approve = any_approved and not any_rejected
         logging.info(
-            f"Making decision for user {user_id}: approved={should_approve}, approved_votes={approved_votes}, rejected_votes={rejected_votes}, all_voted={all_voted}")
+            f"Making decision for user {user_id}: approved={should_approve}, approved_votes={approved_votes}, rejected_votes={rejected_votes}, any_approved={any_approved}")
 
         # Проверяем, изменился ли статус модерации
         current_status = user.moderation_status if user else None
