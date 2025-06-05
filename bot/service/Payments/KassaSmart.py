@@ -22,6 +22,12 @@ class KassaSmart(PaymentSystem):
 
     async def create(self):
         self.ID = str(uuid.uuid4())
+        
+        # Добавляем комиссию 3.5% к цене
+        commission_rate = 0.035  # 3.5%
+        commission_amount = self.price * commission_rate
+        self.price = round(self.price + commission_amount)  # Округляем до целого числа
+        log.info(f"YooKassaSmart: added commission 3.5%, new price: {self.price}")
 
     async def check_payment(self):
         Configuration.account_id = self.ACCOUNT_ID
@@ -32,7 +38,7 @@ class KassaSmart(PaymentSystem):
             if res.status == 'succeeded':
                 await self.successful_payment(
                     self.price,
-                    'YooKassaSmart',
+                    'YooKassaSmart (включая комиссию 3.5%)',
                     id_payment=self.ID
                 )
                 return
@@ -122,7 +128,7 @@ class KassaSmart(PaymentSystem):
         await self.pay_button(link_invoice, delete=False)
         log.info(
             f'Create payment link YooKassaSmart '
-            f'User: (ID: {self.user_id}'
+            f'User: (ID: {self.user_id}) - {self.price} RUB'
         )
         try:
             await self.check_payment()
